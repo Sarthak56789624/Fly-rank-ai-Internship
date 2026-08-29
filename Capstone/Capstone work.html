@@ -1,0 +1,624 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Refresh &amp; Content Opportunity Scoring — FlyRank ML Capstone</title>
+<meta name="description" content="A rule-based decline/recovery scoring system for FlyRank's search warehouse, with an honest account of a data-completeness artifact that changed the headline result.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700;800&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#0a0e13;
+    --bg-panel:#0f151c;
+    --bg-panel-2:#131a22;
+    --bg-raised:#161e27;
+    --line:#223040;
+    --line-soft:#1a232d;
+    --ink:#e7edf3;
+    --ink-dim:#8b9aa8;
+    --ink-faint:#5a6a78;
+    --cyan:#4ce0c7;
+    --coral:#ff6b5b;
+    --amber:#e8b84b;
+    --blue:#6e9bff;
+    --mono: 'JetBrains Mono', ui-monospace, monospace;
+    --sans: 'IBM Plex Sans', -apple-system, sans-serif;
+  }
+  *{box-sizing:border-box;}
+  html{scroll-behavior:smooth;}
+  body{
+    margin:0;
+    background:
+      radial-gradient(1200px 600px at 85% -10%, rgba(76,224,199,0.06), transparent 60%),
+      radial-gradient(900px 500px at -10% 20%, rgba(255,107,91,0.05), transparent 55%),
+      var(--bg);
+    color:var(--ink);
+    font-family:var(--sans);
+    line-height:1.65;
+    -webkit-font-smoothing:antialiased;
+  }
+  ::selection{background:var(--cyan);color:#04140f;}
+  a{color:var(--cyan);text-decoration:none;}
+  a:hover{text-decoration:underline;}
+  a:focus-visible, button:focus-visible{outline:2px solid var(--cyan);outline-offset:3px;border-radius:2px;}
+
+  .grid-overlay{
+    position:fixed; inset:0; pointer-events:none; z-index:0; opacity:0.35;
+    background-image:
+      linear-gradient(var(--line-soft) 1px, transparent 1px),
+      linear-gradient(90deg, var(--line-soft) 1px, transparent 1px);
+    background-size:64px 64px;
+    mask-image:linear-gradient(180deg, black, transparent 900px);
+  }
+
+  /* ---- Top bar ---- */
+  .topbar{
+    position:sticky; top:0; z-index:40;
+    display:flex; align-items:center; justify-content:space-between;
+    gap:12px;
+    padding:12px 20px;
+    background:rgba(10,14,19,0.86);
+    backdrop-filter:blur(10px);
+    border-bottom:1px solid var(--line);
+  }
+  .topbar-left{display:flex; align-items:center; gap:10px; font-family:var(--mono); font-size:12px; color:var(--ink-dim);}
+  .dot-live{width:7px;height:7px;border-radius:50%;background:var(--cyan);box-shadow:0 0 0 3px rgba(76,224,199,0.15);animation:pulse 2.2s infinite;}
+  @keyframes pulse{0%,100%{opacity:1;}50%{opacity:.35;}}
+  .topbar-badges{display:flex; gap:8px; flex-wrap:wrap;}
+  .badge{
+    font-family:var(--mono); font-size:11px; letter-spacing:.02em;
+    padding:4px 9px; border-radius:20px;
+    border:1px solid var(--line);
+    color:var(--ink-dim);
+    white-space:nowrap;
+  }
+  .navtoggle{display:none; background:none;border:1px solid var(--line);color:var(--ink);border-radius:6px;padding:6px 10px;font-family:var(--mono);cursor:pointer;}
+
+  /* ---- Layout shell ---- */
+  .shell{display:grid; grid-template-columns:260px 1fr; max-width:1280px; margin:0 auto; position:relative; z-index:1;}
+  .sidebar{
+    position:sticky; top:49px; align-self:start;
+    height:calc(100vh - 49px);
+    overflow-y:auto;
+    padding:28px 14px 40px 20px;
+    border-right:1px solid var(--line);
+  }
+  .sidebar::-webkit-scrollbar{width:6px;}
+  .sidebar::-webkit-scrollbar-thumb{background:var(--line);border-radius:3px;}
+  .side-label{font-family:var(--mono); font-size:10px; letter-spacing:.14em; text-transform:uppercase; color:var(--ink-faint); margin:0 0 12px 2px;}
+  .side-nav{list-style:none; margin:0 0 28px 0; padding:0; display:flex; flex-direction:column; gap:1px;}
+  .side-nav a{
+    display:flex; align-items:baseline; gap:8px;
+    font-family:var(--mono); font-size:12.5px; color:var(--ink-dim);
+    padding:7px 8px; border-radius:6px; text-decoration:none;
+    border-left:2px solid transparent;
+  }
+  .side-nav a .n{color:var(--ink-faint); font-size:11px;}
+  .side-nav a:hover{background:var(--bg-panel-2); color:var(--ink);}
+  .side-nav a.active{color:var(--cyan); background:rgba(76,224,199,0.06); border-left-color:var(--cyan);}
+  .side-nav a.active .n{color:var(--cyan);}
+  .side-repro{
+    font-family:var(--mono); font-size:11px; color:var(--ink-faint);
+    border-top:1px solid var(--line-soft); padding-top:16px; display:flex; flex-direction:column; gap:6px;
+  }
+  .side-repro a{color:var(--ink-dim); font-size:11px;}
+  .side-repro a:hover{color:var(--cyan);}
+
+  main{padding:0 0 80px 0; min-width:0;}
+
+  /* ---- Hero ---- */
+  .hero{padding:56px 40px 40px 40px; border-bottom:1px solid var(--line);}
+  .eyebrow{font-family:var(--mono); font-size:12px; color:var(--ink-dim); letter-spacing:.06em; margin-bottom:18px; display:flex; align-items:center; gap:10px;}
+  .eyebrow .sep{color:var(--ink-faint);}
+  h1.title{
+    font-family:var(--mono); font-weight:700; font-size:clamp(26px,3.6vw,44px);
+    line-height:1.18; letter-spacing:-0.01em; margin:0 0 20px 0; max-width:20ch;
+    color:var(--ink);
+  }
+  h1.title .hl{color:var(--cyan);}
+  h1.title .hl2{color:var(--coral);}
+  .byline{font-size:14px; color:var(--ink-dim); margin-bottom:34px;}
+  .byline b{color:var(--ink);font-weight:600;}
+
+  /* signature chart */
+  .signature{
+    display:grid; grid-template-columns:1.1fr 0.9fr; gap:28px;
+    background:var(--bg-panel); border:1px solid var(--line); border-radius:10px;
+    padding:22px 24px; margin-bottom:8px;
+  }
+  @media (max-width:820px){ .signature{grid-template-columns:1fr;} }
+  .sig-chart h3{font-family:var(--mono); font-size:12px; text-transform:uppercase; letter-spacing:.08em; color:var(--ink-faint); margin:0 0 14px 0; font-weight:600;}
+  .chart-legend{display:flex; gap:16px; font-family:var(--mono); font-size:11px; color:var(--ink-dim); margin-top:10px;}
+  .chart-legend span{display:inline-flex; align-items:center; gap:6px;}
+  .swatch{width:9px;height:9px;border-radius:2px;display:inline-block;}
+  .sig-term{
+    background:#070a0d; border:1px solid var(--line-soft); border-radius:8px; padding:16px 16px;
+    font-family:var(--mono); font-size:12.5px; color:#9fe3d1; line-height:1.9;
+    min-height:170px;
+  }
+  .sig-term .prompt{color:var(--ink-faint);}
+  .sig-term .flag{color:var(--coral);}
+  .sig-term .ok{color:var(--cyan);}
+  .caret{display:inline-block;width:7px;height:14px;background:var(--cyan);vertical-align:-2px;animation:blink 1s steps(1) infinite;}
+  @keyframes blink{50%{opacity:0;}}
+
+  /* ---- Sections ---- */
+  section.doc{padding:52px 40px; border-bottom:1px solid var(--line-soft); scroll-margin-top:64px;}
+  section.doc:last-of-type{border-bottom:none;}
+  .sec-head{display:flex; align-items:baseline; gap:14px; margin-bottom:22px;}
+  .sec-num{font-family:var(--mono); font-size:13px; color:var(--ink-faint); border:1px solid var(--line); border-radius:6px; padding:3px 8px;}
+  .sec-title{font-family:var(--mono); font-size:clamp(19px,2.4vw,26px); font-weight:700; margin:0; letter-spacing:-0.01em;}
+  .prose p{color:#c9d3dc; font-size:15.5px; max-width:74ch;}
+  .prose h4{font-family:var(--mono); font-size:14px; color:var(--ink); margin:26px 0 10px 0;}
+  .prose em{color:var(--ink); font-style:normal; border-bottom:1px dashed var(--line);}
+
+  .callout{
+    border:1px solid var(--line); border-left:3px solid var(--amber);
+    background:var(--bg-panel); border-radius:0 8px 8px 0;
+    padding:16px 20px; margin:22px 0; max-width:74ch;
+  }
+  .callout .k{font-family:var(--mono); font-size:11px; text-transform:uppercase; letter-spacing:.08em; color:var(--amber); margin-bottom:8px; display:block;}
+  .callout p{margin:0; font-size:14.5px;}
+
+  ul.spec{list-style:none; margin:16px 0; padding:0; max-width:74ch; display:flex; flex-direction:column; gap:10px;}
+  ul.spec li{padding-left:20px; position:relative; color:#c9d3dc; font-size:14.5px;}
+  ul.spec li::before{content:"›"; position:absolute; left:0; color:var(--cyan); font-family:var(--mono);}
+  ul.spec code, .prose code, td code{
+    font-family:var(--mono); background:var(--bg-raised); border:1px solid var(--line);
+    padding:1px 6px; border-radius:4px; font-size:12.5px; color:#bfe8de;
+  }
+
+  .kv-grid{display:grid; grid-template-columns:repeat(2,1fr); gap:1px; background:var(--line); border:1px solid var(--line); border-radius:8px; overflow:hidden; margin:18px 0; max-width:74ch;}
+  @media (max-width:600px){.kv-grid{grid-template-columns:1fr;}}
+  .kv{background:var(--bg-panel); padding:14px 16px;}
+  .kv .k{font-family:var(--mono); font-size:10.5px; text-transform:uppercase; letter-spacing:.07em; color:var(--ink-faint); display:block; margin-bottom:4px;}
+  .kv .v{font-size:14px; color:var(--ink);}
+
+  table{width:100%; border-collapse:collapse; margin:18px 0; font-size:13.5px; background:var(--bg-panel); border:1px solid var(--line); border-radius:8px; overflow:hidden;}
+  thead th{
+    text-align:left; font-family:var(--mono); font-size:10.5px; text-transform:uppercase; letter-spacing:.06em;
+    color:var(--ink-faint); background:var(--bg-raised); padding:10px 14px; border-bottom:1px solid var(--line);
+  }
+  tbody td{padding:11px 14px; border-bottom:1px solid var(--line-soft); color:#c9d3dc;}
+  tbody tr:last-child td{border-bottom:none;}
+  tbody td:first-child{color:var(--ink);}
+  .num{font-family:var(--mono); text-align:right;}
+
+  .state-pill{font-family:var(--mono); font-size:11px; padding:2px 8px; border-radius:20px; display:inline-block; border:1px solid currentColor;}
+  .st-declining{color:var(--coral);}
+  .st-review{color:var(--amber);}
+  .st-recovering{color:var(--cyan);}
+  .st-growing{color:var(--blue);}
+
+  /* distribution bars */
+  .dist{display:flex; flex-direction:column; gap:14px; margin:20px 0; max-width:74ch;}
+  .dist-row{display:grid; grid-template-columns:110px 1fr 90px; align-items:center; gap:12px; font-family:var(--mono); font-size:12.5px;}
+  .dist-row .lab{color:var(--ink-dim);}
+  .dist-track{background:var(--bg-raised); border-radius:4px; height:20px; position:relative; overflow:hidden; display:flex;}
+  .dist-fill{height:100%; opacity:0.85;}
+  .dist-fill.before{opacity:0.35;}
+  .dist-val{text-align:right; color:var(--ink);}
+
+  /* recommendations grid */
+  .rec-grid{display:grid; grid-template-columns:repeat(2,1fr); gap:14px; margin-top:20px;}
+  @media (max-width:760px){.rec-grid{grid-template-columns:1fr;}}
+  .rec-card{background:var(--bg-panel); border:1px solid var(--line); border-radius:8px; padding:18px 20px;}
+  .rec-card .rn{font-family:var(--mono); font-size:11px; color:var(--ink-faint); margin-bottom:8px; display:block;}
+  .rec-card h5{margin:0 0 8px 0; font-size:15px; font-family:var(--mono); color:var(--cyan);}
+  .rec-card p{margin:0; font-size:13.5px; color:#b7c2cc;}
+
+  /* reproducibility terminal block */
+  .repro-block{
+    background:#070a0d; border:1px solid var(--line); border-radius:8px; padding:20px 22px;
+    font-family:var(--mono); font-size:12.5px; color:#a9b6c0; margin:20px 0; max-width:74ch;
+  }
+  .repro-block .line{margin-bottom:6px;}
+  .repro-block .key{color:var(--ink-faint);}
+  .repro-block .val{color:var(--cyan);}
+  .repro-links{display:flex; flex-direction:column; gap:8px; margin-top:8px;}
+
+  footer{padding:44px 40px 60px; text-align:left; max-width:74ch;}
+  footer p{color:var(--ink-dim); font-size:13.5px;}
+  footer .tag{font-family:var(--mono); font-size:11px; color:var(--ink-faint); margin-top:18px;}
+
+  @media (max-width:900px){
+    .shell{grid-template-columns:1fr;}
+    .sidebar{
+      position:fixed; top:49px; left:0; height:calc(100vh - 49px); width:260px;
+      background:var(--bg); z-index:39; transform:translateX(-100%); transition:transform .25s ease;
+      box-shadow:8px 0 24px rgba(0,0,0,0.4);
+    }
+    .sidebar.open{transform:translateX(0);}
+    .navtoggle{display:inline-block;}
+    .hero, section.doc, footer{padding-left:22px; padding-right:22px;}
+  }
+</style>
+</head>
+<body>
+<div class="grid-overlay"></div>
+
+<div class="topbar">
+  <div class="topbar-left">
+    <span class="dot-live"></span> ML-CAP-01 <span style="color:var(--ink-faint)">·</span> Refresh Lane
+  </div>
+  <div class="topbar-badges">
+    <span class="badge">91,587 items scored</span>
+    <span class="badge">client-split validated</span>
+  </div>
+  <button class="navtoggle" id="navToggle" aria-label="Toggle navigation">≡ nav</button>
+</div>
+
+<div class="shell">
+  <aside class="sidebar" id="sidebar">
+    <p class="side-label">Contents</p>
+    <ul class="side-nav" id="sideNav">
+      <li><a href="#abstract"><span class="n">01</span>Abstract</a></li>
+      <li><a href="#introduction"><span class="n">02</span>Introduction</a></li>
+      <li><a href="#data"><span class="n">03</span>Data</a></li>
+      <li><a href="#methodology"><span class="n">04</span>Methodology</a></li>
+      <li><a href="#results"><span class="n">05</span>Results</a></li>
+      <li><a href="#limitations"><span class="n">06</span>Limitations</a></li>
+      <li><a href="#recommendations"><span class="n">07</span>Recommendations</a></li>
+      <li><a href="#reproducibility"><span class="n">08</span>Reproducibility</a></li>
+      <li><a href="#acknowledgments"><span class="n">09</span>Acknowledgments</a></li>
+    </ul>
+    <div class="side-repro">
+      <a href="https://github.com/Sarthak56789624/Fly-rank-ai-Internship" target="_blank" rel="noopener">↗ repository</a>
+      <a href="https://github.com/Sarthak56789624/Fly-rank-ai-Internship/blob/main/Capstone/capstone.ipynb" target="_blank" rel="noopener">↗ capstone notebook</a>
+      <a href="https://flyrank.ai" target="_blank" rel="noopener">↗ flyrank.ai</a>
+    </div>
+  </aside>
+
+  <main>
+    <div class="hero">
+      <div class="eyebrow">FlyRank AI Internship <span class="sep">/</span> Machine Learning Track <span class="sep">/</span> Capstone</div>
+      <h1 class="title">Refresh &amp; Content Opportunity Scoring: finding <span class="hl2">decline signals</span> — and catching the artifact that would have <span class="hl">inflated</span> them</h1>
+      <div class="byline">By <b>Sarthak Sonawane</b> · Refresh / Content Opportunity Scoring lane · Week 8</div>
+
+      <div class="signature">
+        <div class="sig-chart">
+          <h3>Declining share — before vs. after coverage fix</h3>
+          <svg id="sigSvg" viewBox="0 0 420 190" width="100%" height="190" role="img" aria-label="Bar chart comparing declining content share before and after correcting a data completeness artifact, dropping from 53.1 percent to 44.9 percent">
+            <line x1="30" y1="10" x2="30" y2="150" stroke="#223040" stroke-width="1"/>
+            <line x1="30" y1="150" x2="400" y2="150" stroke="#223040" stroke-width="1"/>
+            <text x="0" y="14" fill="#5a6a78" font-family="JetBrains Mono" font-size="9">60%</text>
+            <text x="0" y="82" fill="#5a6a78" font-family="JetBrains Mono" font-size="9">30%</text>
+            <text x="0" y="153" fill="#5a6a78" font-family="JetBrains Mono" font-size="9">0%</text>
+            <line x1="30" y1="12" x2="400" y2="12" stroke="#1a232d" stroke-width="1"/>
+            <line x1="30" y1="81" x2="400" y2="81" stroke="#1a232d" stroke-width="1"/>
+
+            <rect id="barBefore" x="90" y="150" width="70" height="0" fill="#ff6b5b" opacity="0.45" rx="3"/>
+            <text x="125" y="168" fill="#8b9aa8" font-family="JetBrains Mono" font-size="10" text-anchor="middle">before</text>
+            <text id="labelBefore" x="125" y="0" fill="#ff6b5b" font-family="JetBrains Mono" font-size="13" font-weight="700" text-anchor="middle" opacity="0"></text>
+
+            <rect id="barAfter" x="230" y="150" width="70" height="0" fill="#4ce0c7" rx="3"/>
+            <text x="265" y="168" fill="#8b9aa8" font-family="JetBrains Mono" font-size="10" text-anchor="middle">after fix</text>
+            <text id="labelAfter" x="265" y="0" fill="#4ce0c7" font-family="JetBrains Mono" font-size="13" font-weight="700" text-anchor="middle" opacity="0"></text>
+          </svg>
+          <div class="chart-legend">
+            <span><span class="swatch" style="background:#ff6b5b;opacity:.6"></span>MAX(report_date) anchor — artifact included</span>
+            <span><span class="swatch" style="background:#4ce0c7"></span>STABLE_CUTOFF anchor — corrected</span>
+          </div>
+        </div>
+        <div class="sig-term" id="term">
+          <span class="prompt">$</span> scan_reporting_coverage --table fact_content_daily_performance<br>
+        </div>
+      </div>
+    </div>
+
+    <!-- 01 ABSTRACT -->
+    <section class="doc" id="abstract">
+      <div class="sec-head"><span class="sec-num">§01</span><h2 class="sec-title">Abstract</h2></div>
+      <div class="prose">
+        <p>This paper scores 91,587 content items across FlyRank's client warehouse into four states — <em>growing</em>, <em>declining</em>, <em>recovering</em>, or <em>worth review</em> — using a three-window impressions trajectory rather than a simple before/after comparison, so that pages which have already turned around are not mislabeled alongside pages still sliding.</p>
+        <p>An early version of this analysis reported that <b style="color:var(--coral)">53.1%</b> of content was declining; before accepting that number, a completeness check on the trailing days of the warehouse uncovered a ~15% drop in reporting coverage in the most recent five days of data — an artifact, not a market shift. Anchoring the analysis window to the last date with full coverage revised the estimate to <b style="color:var(--cyan)">44.9%</b> declining, with recovering content nearly doubling from 9.1% to 14.6%.</p>
+        <p>The paper reports the corrected pipeline, four reason codes explaining roughly three-quarters of flagged declines, a per-client validation showing the pattern is directionally consistent but not uniform across FlyRank's clients, and a ranked, impact-weighted action list a search team could work from directly.</p>
+      </div>
+    </section>
+
+    <!-- 02 INTRO -->
+    <section class="doc" id="introduction">
+      <div class="sec-head"><span class="sec-num">§02</span><h2 class="sec-title">Introduction &amp; problem statement</h2></div>
+      <div class="prose">
+        <p>A search team managing hundreds or thousands of content items cannot manually review each one every month. The Refresh / Content Opportunity Scoring lane asks a narrower, answerable question: <em>given recent search performance, which content items are growing, declining, recovering, or ambiguous enough to need a human look — and for the ones losing visibility, what does the evidence suggest is happening?</em></p>
+        <p>The goal is not a single accuracy number. It is a ranked, explainable action list: an output a search or content team could open on a Monday morning and start working from, with the highest-impact items first and a stated reason for each flag they can agree or disagree with. That framing shaped every methodology choice below — this paper favors interpretable rules over a black-box classifier, and spends real effort validating that the underlying signal is genuine before trusting it.</p>
+      </div>
+    </section>
+
+    <!-- 03 DATA -->
+    <section class="doc" id="data">
+      <div class="sec-head"><span class="sec-num">§03</span><h2 class="sec-title">Data</h2></div>
+      <div class="prose">
+        <p>All analysis runs against the pseudonymized <code>FlyRank/internship-warehouse</code> release on Hugging Face, queried in place via DuckDB over Parquet — the raw warehouse is queried in place and is not redistributed. Two tables are used:</p>
+        <ul class="spec">
+          <li><code>fact_content_daily_performance</code> — daily Google Search Console impressions, clicks, and average position per content item per client.</li>
+          <li><code>fact_content_query_90d</code> — a 90-day query-mix summary per content item (visible query count, rare/anonymized impression share, top-query concentration).</li>
+        </ul>
+
+        <h4>A data-completeness artifact, and how it was found</h4>
+        <p>The first pass anchored all time windows on <code>MAX(report_date)</code> in the daily table — the most recent date present. A diagnostic count of distinct content items reported per day revealed a clear break: coverage held steady around 399,000–406,000 items per day through 2026-06-25, then dropped to roughly 345,000 items per day for the final five days in the table, while total impressions stayed roughly flat.</p>
+
+        <div class="callout">
+          <span class="k">Why this matters</span>
+          <p>That pattern — total impressions steady, distinct content count falling — is the signature of an incomplete backfill, not a genuine traffic collapse: the same volume of search activity is being attributed to fewer reported items because long-tail items haven't finished landing in the warehouse for those trailing days. Any window built on <code>MAX(report_date)</code> would have those five thin days inside its <code>last30</code> bucket, mechanically dragging every trailing-window comparison negative.</p>
+        </div>
+
+        <p>The fix: anchor all three windows on <code>STABLE_CUTOFF = '2026-06-25'</code>, the last date with full-coverage reporting, rather than the table's true maximum date. Section 5 reports how much this changed the headline result.</p>
+        <p>Only content items with at least <code>MIN_PRIOR_IMPRESSIONS = 100</code> impressions in <em>both</em> the prev30 and older30 windows are scored, to avoid classifying near-zero-traffic items where small denominators produce unstable percentage changes. This filter yields <b style="color:var(--ink)">91,587</b> content items with sufficient history across all three windows. No client names, domains, URLs, private queries, or credentials are used or reproduced anywhere in this paper.</p>
+      </div>
+    </section>
+
+    <!-- 04 METHODOLOGY -->
+    <section class="doc" id="methodology">
+      <div class="sec-head"><span class="sec-num">§04</span><h2 class="sec-title">Methodology</h2></div>
+      <div class="prose">
+        <h4>Three-window trajectory, not a two-point comparison</h4>
+        <p>Each content item's impressions are aggregated into three 30-day windows relative to <code>STABLE_CUTOFF</code>: <code>last30</code> (most recent), <code>prev30</code> (30–60 days back), and <code>older30</code> (60–90 days back). A two-point comparison cannot distinguish a page that is still sliding from one that dropped and has since turned around — the three-point trajectory can, which is the difference between a <em>declining</em> label and a <em>recovering</em> one.</p>
+
+        <h4>State classification</h4>
+        <p>Percent change is computed for both the most recent transition (<code>chg_recent = (last30 − prev30) / prev30</code>) and the prior one (<code>chg_prior = (prev30 − older30) / older30</code>), then classified against symmetric ±15% thresholds:</p>
+        <ul class="spec">
+          <li><span class="state-pill st-growing">growing</span> — meaningful recent increase, not preceded by a prior decline reversal pattern.</li>
+          <li><span class="state-pill st-declining">declining</span> — meaningful recent decrease, continuing a prior trend rather than reversing one.</li>
+          <li><span class="state-pill st-recovering">recovering</span> — recent increase following a prior decline: a genuine turnaround.</li>
+          <li><span class="state-pill st-review">worth_review</span> — insufficient history, a reversal from growth to decline, or a change too small to classify confidently. A deliberate "flag, don't guess" bucket rather than a forced binary call.</li>
+        </ul>
+        <p>The ±15% threshold is a judgment call, chosen to exceed ordinary week-to-week noise without being so wide that only extreme movers get flagged. It is stated explicitly here so it can be challenged or tuned by whoever uses this pipeline next.</p>
+
+        <h4>Reason codes</h4>
+        <p>Every declining or worth_review item is additionally tagged with one or more descriptive reason codes computed from the observed performance windows. These codes explain the observed movement; they are not predictive features:</p>
+        <ul class="spec">
+          <li><code>position_worsened</code> — average SERP position dropped by ≥1 point.</li>
+          <li><code>ctr_drop_despite_stable_impressions</code> — impressions held (≥90% of prior) but click-through rate fell &gt;1pt, pointing at a title/meta/SERP-appearance issue rather than a visibility issue.</li>
+          <li><code>over_reliant_on_single_query</code> — over 70% of an item's impressions come from one query, a concentration risk.</li>
+          <li><code>high_volatility_noisy_trend</code> — day-level impression coefficient of variation ≥1.0 over the trailing 90 days; the "decline" may be noise around a flat average rather than a trend.</li>
+          <li><code>severe_broad_decline</code> — a catch-all for drops ≥50% with none of the above signals present. Intentionally descriptive rather than diagnostic; see Limitations.</li>
+        </ul>
+
+        <h4>Validation across clients</h4>
+        <p>A rule tuned against one or two large clients would not generalize. Clients (not rows) were split 50/50 using <code>GroupShuffleSplit(random_state=42)</code>, so no client's content appears in both halves, and the state distribution was compared across the two groups — a fair test of whether the pattern is a warehouse-wide signal or an artifact of a few dominant accounts.</p>
+      </div>
+    </section>
+
+    <!-- 05 RESULTS -->
+    <section class="doc" id="results">
+      <div class="sec-head"><span class="sec-num">§05</span><h2 class="sec-title">Results</h2></div>
+      <div class="prose">
+        <h4>The completeness fix materially changed the headline number</h4>
+        <p>State distribution — before vs. after anchoring on STABLE_CUTOFF:</p>
+
+        <div class="dist">
+          <div class="dist-row">
+            <span class="lab st-declining">declining</span>
+            <div class="dist-track">
+              <div class="dist-fill before" style="width:53.1%; background:var(--coral);"></div>
+            </div>
+            <span class="dist-val">53.1% → <b style="color:var(--coral)">44.9%</b></span>
+          </div>
+          <div class="dist-row">
+            <span class="lab st-review">worth_review</span>
+            <div class="dist-track"><div class="dist-fill" style="width:30.9%; background:var(--amber);"></div></div>
+            <span class="dist-val">30.5% → <b style="color:var(--amber)">30.9%</b></span>
+          </div>
+          <div class="dist-row">
+            <span class="lab st-recovering">recovering</span>
+            <div class="dist-track"><div class="dist-fill" style="width:14.6%; background:var(--cyan);"></div></div>
+            <span class="dist-val">9.1% → <b style="color:var(--cyan)">14.6%</b></span>
+          </div>
+          <div class="dist-row">
+            <span class="lab st-growing">growing</span>
+            <div class="dist-track"><div class="dist-fill" style="width:9.7%; background:var(--blue);"></div></div>
+            <span class="dist-val">7.3% → <b style="color:var(--blue)">9.7%</b></span>
+          </div>
+        </div>
+        <p>Declining fell 8.2 points and recovering nearly doubled once the five thin trailing days were excluded. This is the paper's central methodological result: the artifact was not a rounding error, it was large enough to change which of the four states was the plurality story for a meaningful share of content.</p>
+
+        <h4>Final system vs. simple baseline</h4>
+        <table>
+          <thead><tr><th>Approach</th><th>Declining share</th><th>What it provides</th></tr></thead>
+          <tbody>
+            <tr><td>Simple two-window baseline</td><td class="num">59.26%</td><td>Flags recent impression decline only</td></tr>
+            <tr><td>Final three-window system</td><td class="num">44.89%</td><td>Four states + reason codes + impact ranking</td></tr>
+          </tbody>
+        </table>
+
+        <h4>Reason-code coverage</h4>
+        <table>
+          <thead><tr><th>Reason code</th><th>Share</th></tr></thead>
+          <tbody>
+            <tr><td><code>position_worsened</code> (single cause)</td><td class="num">32.1%</td></tr>
+            <tr><td>unclassified_decline</td><td class="num">28.2%</td></tr>
+            <tr><td><code>high_volatility_noisy_trend</code> (single)</td><td class="num">9.6%</td></tr>
+            <tr><td><code>severe_broad_decline</code></td><td class="num">8.1%</td></tr>
+          </tbody>
+        </table>
+        <p>Shares computed over the 69,397 declining/worth_review rows in the corrected run. Position movement is the single most common individually-identified cause; roughly a quarter of flagged items still receive no specific explanation (see Limitations).</p>
+
+        <h4>Client-level validation</h4>
+        <table>
+          <thead><tr><th>State</th><th>Client group A</th><th>Client group B</th></tr></thead>
+          <tbody>
+            <tr><td class="st-declining">declining</td><td class="num">53.2%</td><td class="num">39.0%</td></tr>
+            <tr><td class="st-review">worth_review</td><td class="num">27.7%</td><td class="num">33.1%</td></tr>
+            <tr><td class="st-recovering">recovering</td><td class="num">11.4%</td><td class="num">16.8%</td></tr>
+            <tr><td class="st-growing">growing</td><td class="num">7.7%</td><td class="num">11.1%</td></tr>
+          </tbody>
+        </table>
+        <p>Declining is the plurality state in both randomly-split client groups — the direction of the finding replicates. The 14-point gap between groups (53.2% vs. 39.0%) means the <em>magnitude</em> is not uniform across FlyRank's client base, which is expected given the concentration described in Limitations, and is reported honestly rather than smoothed over.</p>
+
+        <h4>Ranked action list (sample)</h4>
+        <p>Top items by <code>impressions_at_stake = max(imp_prev30 − imp_last30, 0)</code>:</p>
+        <table>
+          <thead><tr><th>State</th><th>Reason code</th><th>Prev30 → Last30</th><th>Impressions at stake</th></tr></thead>
+          <tbody>
+            <tr><td class="st-review">worth_review</td><td>position_worsened, over_reliant_on_single_query</td><td class="num">213,610 → 6,001</td><td class="num">207,609</td></tr>
+            <tr><td class="st-declining">declining</td><td>position_worsened</td><td class="num">178,306 → 6,777</td><td class="num">171,529</td></tr>
+            <tr><td class="st-declining">declining</td><td>position_worsened</td><td class="num">218,715 → 48,447</td><td class="num">170,268</td></tr>
+            <tr><td class="st-review">worth_review</td><td>position_worsened</td><td class="num">191,252 → 22,969</td><td class="num">168,283</td></tr>
+            <tr><td class="st-review">worth_review</td><td>severe_broad_decline</td><td class="num">147,526 → 15,058</td><td class="num">132,468</td></tr>
+          </tbody>
+        </table>
+        <p style="font-size:13px; color:var(--ink-faint);">The full ranked action table is retained as an analysis artifact. The public paper presents only aggregated, public-safe results.</p>
+      </div>
+    </section>
+
+    <!-- 06 LIMITATIONS -->
+    <section class="doc" id="limitations">
+      <div class="sec-head"><span class="sec-num">§06</span><h2 class="sec-title">Limitations &amp; honest framing</h2></div>
+      <div class="prose">
+        <ul class="spec">
+          <li><b style="color:var(--ink)">Client concentration.</b> The top 10 clients account for roughly 87% of all scored rows, and their individual declining shares range from about 31% to 79%. The warehouse-wide numbers reported above are meaningfully shaped by a small number of large accounts; they are not evidence of a uniform, industry-wide pattern.</li>
+          <li><b style="color:var(--ink)">Thresholds are a judgment call, not a derived optimum.</b> ±15% and the volatility/position cutoffs were chosen to be defensible, not fit to any objective function. A different reasonable choice would shift the state boundaries somewhat; the qualitative story is more robust than any single percentage.</li>
+          <li><b style="color:var(--ink)">~25% of flagged items remain unclassified.</b> The current reason codes explain roughly three-quarters of declining/worth_review items. The remainder likely includes causes outside this analysis's feature set (external demand shifts, seasonality, competitor moves) and is reported as a gap rather than papered over.</li>
+          <li><b style="color:var(--ink)"><code>severe_broad_decline</code> is descriptive, not diagnostic.</b> It is close to restating "this item declined a lot" rather than explaining why, and is labeled accordingly so it isn't mistaken for a causal finding.</li>
+          <li><b style="color:var(--ink)">Correlational, not causal.</b> A <code>position_worsened</code> tag says position and impressions moved together — it cannot establish that a ranking change caused the impression change, or rule out a shared external cause for both.</li>
+          <li><b style="color:var(--ink)">Extreme percentage changes come from small denominators.</b> The largest positive <code>chg_recent</code> values (multiple-hundred-percent increases) all occur on items with a low <code>imp_prev30</code> base (roughly 100–300); none of these appear in the declining state, but they are a reminder that percentage-based thresholds behave differently near the <code>MIN_PRIOR_IMPRESSIONS</code> floor.</li>
+          <li><b style="color:var(--ink)">Single time period.</b> This analysis reflects one 90-day window ending 2026-06-25. It has not been validated against a second period, so it cannot yet distinguish a stable pattern from one specific to this quarter.</li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- 07 RECOMMENDATIONS -->
+    <section class="doc" id="recommendations">
+      <div class="sec-head"><span class="sec-num">§07</span><h2 class="sec-title">Ranked recommendations</h2></div>
+      <div class="prose">
+        <p>An action playbook mapped from state and reason code to a concrete next step:</p>
+        <div class="rec-grid">
+          <div class="rec-card"><span class="rn">01</span><h5>declining + position_worsened → ranking/technical review</h5><p>The largest identified group (32.1% of flagged items). Prioritize by impressions_at_stake and route to a technical/authority review for further investigation.</p></div>
+          <div class="rec-card"><span class="rn">02</span><h5>ctr_drop_despite_stable_impressions → title/meta refresh</h5><p>Small group but a clean, high-confidence signal: visibility held, clicks didn't. These are the cheapest wins in the list — a title/meta/snippet update, not a content rebuild.</p></div>
+          <div class="rec-card"><span class="rn">03</span><h5>over_reliant_on_single_query → diversify targeting</h5><p>Content dependent on one query is fragile by construction. Recommend expanding on-page coverage of adjacent query intent before this item's single query drifts or gets contested.</p></div>
+          <div class="rec-card"><span class="rn">04</span><h5>high_volatility_noisy_trend → hold, don't act yet</h5><p>These items look like they're declining but their day-level variance is high enough that the "decline" may be noise. Recommend a longer observation window before committing resources.</p></div>
+          <div class="rec-card"><span class="rn">05</span><h5>unclassified_decline / severe_broad_decline → manual review queue</h5><p>No automated reason code fires with confidence for roughly a third of flagged items. Route to a human reviewer rather than force an automated label.</p></div>
+          <div class="rec-card"><span class="rn">06</span><h5>growing → protect, don't touch</h5><p>Explicitly exclude growing items from any refresh/rewrite queue. A well-intentioned edit to a page that is already working is a common way well-meaning content teams cause self-inflicted declines.</p></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 08 REPRODUCIBILITY -->
+    <section class="doc" id="reproducibility">
+      <div class="sec-head"><span class="sec-num">§08</span><h2 class="sec-title">Reproducibility</h2></div>
+      <div class="prose">
+        <p>Full pipeline, from warehouse connection through the saved CSVs referenced above, is in the capstone notebook in this repository:</p>
+        <div class="repro-block">
+          <div class="repro-links">
+            <a href="https://github.com/Sarthak56789624/Fly-rank-ai-Internship" target="_blank" rel="noopener">↗ Fly-rank-ai-Internship (repository)</a>
+            <a href="https://github.com/Sarthak56789624/Fly-rank-ai-Internship/blob/main/Capstone/capstone.ipynb" target="_blank" rel="noopener">↗ Capstone/capstone.ipynb <span class="key">(final capstone-format notebook)</span></a>
+          </div>
+        </div>
+        <div class="kv-grid">
+          <div class="kv"><span class="k">Data source</span><span class="v"><code>hf://datasets/FlyRank/internship-warehouse</code></span></div>
+          <div class="kv"><span class="k">Access</span><span class="v">Queried live via DuckDB — no raw data redistributed</span></div>
+          <div class="kv"><span class="k">Environment</span><span class="v">Python 3.11 · DuckDB · pandas · scikit-learn</span></div>
+          <div class="kv"><span class="k">Split method</span><span class="v"><code>GroupShuffleSplit(random_state=42)</code></span></div>
+        </div>
+        <h4>Key parameters</h4>
+        <div class="repro-block">
+          <div class="line"><span class="key">STABLE_CUTOFF</span> = <span class="val">'2026-06-25'</span></div>
+          <div class="line"><span class="key">MIN_PRIOR_IMPRESSIONS</span> = <span class="val">100</span></div>
+          <div class="line"><span class="key">GROWTH_THRESHOLD</span> = <span class="val">0.15</span></div>
+          <div class="line"><span class="key">DECLINE_THRESHOLD</span> = <span class="val">-0.15</span></div>
+          <div class="line"><span class="key">HIGH_VOLATILITY_CV</span> = <span class="val">1.0</span></div>
+          <div class="line"><span class="key">POSITION_WORSENING</span> = <span class="val">1.0</span></div>
+        </div>
+        <p style="font-size:13px; color:var(--ink-faint);">Outputs: the full scoring and ranked-action tables were generated as analysis artifacts; only aggregated, public-safe results are presented on this page.</p>
+      </div>
+    </section>
+
+    <!-- 09 ACKNOWLEDGMENTS -->
+    <section class="doc" id="acknowledgments">
+      <div class="sec-head"><span class="sec-num">§09</span><h2 class="sec-title">Acknowledgments &amp; data credit</h2></div>
+      <div class="prose">
+        <p>Built on the FlyRank ML Internship dataset. Thanks to the FlyRank team for the warehouse release, the lane brief, and the Q&amp;A support throughout the program. Learn more at <a href="https://flyrank.ai" target="_blank" rel="noopener">flyrank.ai</a>.</p>
+      </div>
+    </section>
+
+    <footer>
+      <p>ML-CAP-01 — Refresh / Content Opportunity Scoring — FlyRank AI Internship, Machine Learning Track</p>
+      <div class="tag">By Sarthak Sonawane</div>
+    </footer>
+  </main>
+</div>
+
+<script>
+  // mobile nav toggle
+  const toggle = document.getElementById('navToggle');
+  const sidebar = document.getElementById('sidebar');
+  toggle?.addEventListener('click', () => sidebar.classList.toggle('open'));
+  sidebar?.querySelectorAll('a').forEach(a => a.addEventListener('click', () => sidebar.classList.remove('open')));
+
+  // active section highlight
+  const links = Array.from(document.querySelectorAll('#sideNav a'));
+  const sections = links.map(a => document.querySelector(a.getAttribute('href')));
+  const io = new IntersectionObserver((entries) => {
+    entries.forEach(entry => {
+      const idx = sections.indexOf(entry.target);
+      if (idx === -1) return;
+      if (entry.isIntersecting) {
+        links.forEach(l => l.classList.remove('active'));
+        links[idx].classList.add('active');
+      }
+    });
+  }, { rootMargin: '-20% 0px -70% 0px', threshold: 0 });
+  sections.forEach(s => s && io.observe(s));
+
+  // hero signature chart animation
+  function animateHero(){
+    const maxH = 138; // px for 60%
+    const beforeVal = 53.1, afterVal = 44.9;
+    const barBefore = document.getElementById('barBefore');
+    const barAfter = document.getElementById('barAfter');
+    const labelBefore = document.getElementById('labelBefore');
+    const labelAfter = document.getElementById('labelAfter');
+    const term = document.getElementById('term');
+
+    const bH = (beforeVal/60)*maxH;
+    const aH = (afterVal/60)*maxH;
+
+    requestAnimationFrame(()=>{
+      barBefore.style.transition = 'height 1.1s cubic-bezier(.2,.8,.2,1), y 1.1s cubic-bezier(.2,.8,.2,1)';
+      barBefore.setAttribute('height', bH);
+      barBefore.setAttribute('y', 150-bH);
+      labelBefore.setAttribute('y', 150-bH-8);
+      labelBefore.textContent = beforeVal+'%';
+      labelBefore.style.transition = 'opacity .4s ease .9s';
+      labelBefore.style.opacity = 1;
+
+      setTimeout(()=>{
+        barAfter.style.transition = 'height 1.1s cubic-bezier(.2,.8,.2,1), y 1.1s cubic-bezier(.2,.8,.2,1)';
+        barAfter.setAttribute('height', aH);
+        barAfter.setAttribute('y', 150-aH);
+        labelAfter.setAttribute('y', 150-aH-8);
+        labelAfter.textContent = afterVal+'%';
+        labelAfter.style.transition = 'opacity .4s ease .9s';
+        labelAfter.style.opacity = 1;
+      }, 550);
+    });
+
+    // terminal typing sequence
+    const lines = [
+      { text: '&gt; coverage steady: 399k&ndash;406k items/day through 2026-06-25', cls:'' },
+      { text: '&gt; last 5 days: ~345k items/day, impressions flat', cls:'flag' },
+      { text: '&gt; ARTIFACT DETECTED — incomplete backfill, not a traffic drop', cls:'flag' },
+      { text: '&gt; re-anchoring windows on STABLE_CUTOFF = 2026-06-25', cls:'' },
+      { text: '&gt; declining share: 53.1% &rarr; 44.9%  [corrected]', cls:'ok' },
+    ];
+    let i = 0;
+    function typeNext(){
+      if(i >= lines.length) return;
+      const div = document.createElement('div');
+      if(lines[i].cls) div.className = lines[i].cls;
+      div.innerHTML = lines[i].text;
+      div.style.opacity = 0;
+      term.appendChild(div);
+      requestAnimationFrame(()=>{ div.style.transition='opacity .3s ease'; div.style.opacity = 1; });
+      i++;
+      setTimeout(typeNext, 480);
+    }
+    setTimeout(typeNext, 300);
+  }
+  animateHero();
+</script>
+</body>
+</html>
